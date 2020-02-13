@@ -13,11 +13,18 @@ import { EditorOption } from 'vs/editor/common/config/editorOptions';
 import { Position } from 'vs/editor/common/core/position';
 import { ITextModel, IModelDeltaDecoration, TrackedRangeStickiness } from 'vs/editor/common/model';
 import { CancellationToken } from 'vs/base/common/cancellation';
-import { IRange } from 'vs/editor/common/core/range';
+import { IRange, Range } from 'vs/editor/common/core/range';
 import { OnTypeRenameProviderRegistry } from 'vs/editor/common/modes';
 import { first, createCancelablePromise, CancelablePromise } from 'vs/base/common/async';
 import { onUnexpectedExternalError, onUnexpectedError } from 'vs/base/common/errors';
 import { ModelDecorationOptions } from 'vs/editor/common/model/textModel';
+
+function isWithin(inner: IRange, outer: IRange) {
+	return outer.startLineNumber <= inner.startLineNumber &&
+		outer.endLineNumber >= inner.endLineNumber &&
+		outer.startColumn <= inner.startColumn &&
+		outer.endColumn >= inner.endColumn;
+}
 
 class OnTypeRenameContribution extends Disposable implements IEditorContribution {
 
@@ -33,6 +40,8 @@ class OnTypeRenameContribution extends Disposable implements IEditorContribution
 
 	private _currentRequest: CancelablePromise<IRange[] | null | undefined> | null;
 	private _currentDecorations: string[];
+
+	private _syncedRanges: IRange[] | null | undefined;
 
 	constructor(
 		editor: ICodeEditor,
@@ -71,6 +80,35 @@ class OnTypeRenameContribution extends Disposable implements IEditorContribution
 			const model = this._editor.getModel();
 			// TODO
 			console.log(`buffer changed!`);
+
+			if (e.changes.length === 1) {
+				const change = e.changes[0];
+				if (change.rangeLength === 0) {
+					if (this._syncedRanges && this._syncedRanges.length > 0) {
+						if (isWithin(change.range, this._syncedRanges[0])) {
+							const firstStartOffset = this._editor.getModel().getOffsetAt(new Position(this._syncedRanges[0].startLineNumber, this._syncedRanges[0].startColumn));
+							// const secondEndOffset = this._editor.getModel().getOffsetAt(new Position(this._syncedRanges[1].endLineNumber, this._syncedRanges[1].endColumn));
+							// console.log(secondEndOffset);
+
+							const targetRange = new Range(
+								this._syncedRanges[1].startLineNumber,
+								this._syncedRanges[1].startColumn + (change.rangeOffset - firstStartOffset),
+								this._syncedRanges[1].startLineNumber,
+								this._syncedRanges[1].startColumn + (change.rangeOffset - firstStartOffset)
+							);
+
+							this._editor.executeEdits('foo', [
+								{
+									range: targetRange,
+									text: change.text
+								}
+							]);
+						}
+					}
+				}
+
+			}
+
 			console.log(this._currentDecorations.map(id => model.getDecorationRange(id)));
 		}));
 	}
@@ -106,6 +144,7 @@ class OnTypeRenameContribution extends Disposable implements IEditorContribution
 				value = [];
 			}
 			const decorations: IModelDeltaDecoration[] = value.map(range => ({ range: range, options: OnTypeRenameContribution.DECORATION }));
+			this._syncedRanges = value;
 			this._currentDecorations = this._editor.deltaDecorations(this._currentDecorations, decorations);
 		}, err => onUnexpectedError(err));
 	}
